@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use tauri::{Emitter, Manager};
 
 const BARD_BUNDLE_ID: &str = "com.bard.prompter";
+const BARD_EXECUTABLE: &str = "bard";
 
 /// Download the release DMG from GitHub, verify the app bundle inside it, and
 /// install it in place (replacing the running app) before relaunching. Runs on
@@ -128,16 +129,51 @@ fn detach_dmg(mount: &Path) -> Result<(), String> {
     }
 }
 
-/// The download isn't signed/notarized; check the bundled app's Info.plist so
-/// we at least don't install a bogus bundle.
+/// The download isn't signed/notarized; validate the bundle's structure and
+/// code signature so we at least don't install a bogus or "damaged" bundle.
 fn verify_bundle(app_bundle: &Path) -> Result<(), String> {
     let plist = app_bundle.join("Contents/Info.plist");
     let raw = fs::read_to_string(&plist).map_err(|e| format!("Bad update bundle: {e}"))?;
-    if raw.contains(BARD_BUNDLE_ID) {
-        Ok(())
-    } else {
-        Err("The downloaded bundle isn't a valid Bard app".into())
+
+    // Binary plists in release bundles are fine to read as raw XML after
+    // `plutil -convert`; here we do a structured check via `plutil` if
+    // available, otherwise fall back to a string scan.
+    let id = std::process::Command::new("/usr/bin/plutil")
+        .args(["-extract", "CFBundleIdentifier", "raw", "-o", "-"])
+        .arg(&plist)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+    let bundle_id_ok = match &id {
+        Some(id) => id == BARD_BUNDLE_ID,
+        None => raw.contains(BARD_BUNDLE_ID),
+    };
+    if !bundle_id_ok {
+        return Err("The downloaded bundle isn't a valid Bard app".into());
     }
+
+    let exe = app_bundle.join("Contents/MacOS").join(BARD_EXECUTABLE);
+    if !exe.is_file() {
+        return Err("The downloaded bundle is missing the Bard executable".into());
+    }
+
+    // The DMG is built from an ad-hoc-signed app; verify its signature so we
+    // don't install a bundle macOS would flag as damaged.
+    let verify = std::process::Command::new("/usr/bin/codesign")
+        .args(["--verify", "--deep", "--strict"])
+        .arg(app_bundle)
+        .output()
+        .map_err(|e| format!("Couldn't verify the downloaded app: {e}"))?;
+    if !verify.status.success() {
+        return Err(format!(
+            "The downloaded app failed signature verification: {}",
+            String::from_utf8_lossy(&verify.stderr).trim()
+        ));
+    }
+
+    Ok(())
 }
 
 /// Replace the installed app with the update. If a running app was already

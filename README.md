@@ -31,6 +31,11 @@ The gap between *what you're thinking* and *what you type* is where agents go wr
 > Finder → **Open** → **Open** to allow it. If you see a "damaged" message,
 > run `xattr -cr /Applications/Bard.app` in Terminal to clear the quarantine
 > attribute.
+>
+> The release pipeline now ad-hoc signs the app bundle **before** creating the
+> DMG and verifies the signature of the app *inside* the DMG, so the shipped
+> artifact is never an unsigned bundle. Ad-hoc signing still means macOS may
+> require the first-launch approval above; it does not provide notarization.
 
 ## Requirements
 
@@ -51,12 +56,21 @@ The frontend is React + Vite + TypeScript; the shell is Tauri 2 (Rust).
 ## Publishing
 
 ```bash
-./scripts/publish-release.sh 0.2.0
+./scripts/publish-release.sh 0.3.2
 ```
 
-This bumps the version, builds the DMG, commits and tags, then creates a GitHub
-release with the DMG attached. Users running an older version get a banner in
-the app pointing at the new release.
+The release pipeline:
+
+1. Bumps the version in `package.json` and `tauri.conf.json`.
+2. Builds the app bundle.
+3. Ad-hoc signs `Bard.app`.
+4. Verifies the signed source bundle with `codesign --verify --deep --strict`.
+5. Builds the DMG synchronously from that signed bundle.
+6. Verifies the app *inside the DMG* with `scripts/verify-dmg.sh`.
+7. Commits, tags, and creates a GitHub release with the verified DMG.
+
+A failed build, missing bundle, or signature failure aborts the release before
+anything is pushed.
 
 ## Updating the app
 
@@ -64,6 +78,8 @@ Bard checks the GitHub releases feed on launch. When a new version is live:
 
 - A banner appears in the main window — **Update** downloads the new DMG,
   replaces the installed Bard.app in place, and relaunches automatically.
+- The updater verifies the downloaded bundle (identifier, executable, and
+  `codesign --verify --deep --strict`) before replacing the installed app.
 - Settings → Updates shows the current version, a **Check for Updates** button,
   and the download progress.
 

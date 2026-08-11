@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Publish a new Bard release: build the DMG, push tags, attach to GitHub Releases.
+# Publish a new Bard release: build the app, ad-hoc sign it, package the DMG,
+# verify the signed app inside the DMG, push tags, and attach to GitHub Releases.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VERSION="${1:?Usage: ./scripts/publish-release.sh <version> (e.g. 0.2.0)}"
+VERSION="${1:?Usage: ./scripts/publish-release.sh <version> (e.g. 0.3.2)}"
 REPO="marcpadz/bard"
+APP_BUNDLE="src-tauri/target/release/bundle/macos/Bard.app"
+DMG_DIR="src-tauri/target/release/bundle/dmg"
+DMG_PATH="${DMG_DIR}/Bard_${VERSION}_aarch64.dmg"
 
 # 1. Bump version in package.json + tauri.conf.json
 node -e "
@@ -18,18 +22,28 @@ for (const f of ['package.json', 'src-tauri/tauri.conf.json']) {
 console.log('version bumped to $VERSION');
 "
 
-# 2. Build the DMG (temporarily disables the app bundle target check so a
-#    valid macOS app is built; the DMG is produced by step 2b below).
+# 2. Build the app bundle (no DMG — we package after signing).
 npm run tauri build -- --no-bundle
+if [[ ! -d "$APP_BUNDLE" ]]; then
+  echo "ERROR: app bundle not produced at $APP_BUNDLE" >&2
+  exit 1
+fi
 
-# 2b. Build the DMG explicitly — tauri's bundled script runs in the background
-#     and can exit non-zero without failing the build (the DMG silently
-#     missing), so we invoke it synchronously here.
-DMG_DIR="src-tauri/target/release/bundle/dmg"
-DMG_PATH="${DMG_DIR}/Bard_${VERSION}_aarch64.dmg"
+# 3. Ad-hoc sign the app bundle BEFORE packaging so the DMG contains a signed
+#    app. Signing after packaging was shipping an unsigned app as "damaged".
+codesign --force --deep --sign - "$APP_BUNDLE"
+
+# 4. Verify the source bundle before packaging.
+if ! /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE" 2>&1; then
+  echo "ERROR: source bundle failed signature verification — aborting release" >&2
+  exit 1
+fi
+
+# 5. Build the DMG synchronously. Tauri's bundled script can exit non-zero
+#    without failing `tauri build`, so we invoke it explicitly here.
 rm -f "$DMG_PATH" "$DMG_DIR"/rw.*.dmg
 if [[ ! -f "$DMG_DIR/bundle_dmg.sh" ]]; then
-  echo "DMG bundling script missing after build — something went wrong" >&2
+  echo "ERROR: DMG bundling script missing after build" >&2
   exit 1
 fi
 bash "$DMG_DIR/bundle_dmg.sh" \
@@ -40,24 +54,27 @@ bash "$DMG_DIR/bundle_dmg.sh" \
   --icon Bard.app 140 190 \
   "$DMG_PATH" "src-tauri/target/release/bundle/macos" >/dev/null
 if [[ ! -s "$DMG_PATH" ]]; then
-  echo "DMG was not produced — aborting release" >&2
+  echo "ERROR: DMG was not produced — aborting release" >&2
   exit 1
 fi
 
-# 3. Re-sign the app bundle ad-hoc so Gatekeeper doesn't flag it as damaged
-APP_BUNDLE="src-tauri/target/release/bundle/macos/Bard.app"
-codesign --force --deep --sign - "$APP_BUNDLE"
+# 6. Verify the app INSIDE the DMG (not just the source bundle). This is the
+#    artifact users actually install/update with.
+if ! scripts/verify-dmg.sh "$DMG_PATH"; then
+  echo "ERROR: DMG verification failed — aborting release" >&2
+  exit 1
+fi
 
-# 4. Copy DMG to project root
-cp "src-tauri/target/release/bundle/dmg/Bard_${VERSION}_aarch64.dmg" "./Bard_${VERSION}_aarch64.dmg"
+# 7. Copy DMG to project root
+cp "$DMG_PATH" "./Bard_${VERSION}_aarch64.dmg"
 
-# 5. Commit + tag
+# 8. Commit + tag
 git add package.json src-tauri/tauri.conf.json
 git commit -m "Release v${VERSION}" || true
 git tag "v${VERSION}"
 git push origin main --tags
 
-# 6. Publish GitHub release with DMG
+# 9. Publish GitHub release with DMG
 gh release create "v${VERSION}" \
   "./Bard_${VERSION}_aarch64.dmg" \
   --repo "$REPO" \
