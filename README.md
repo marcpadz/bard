@@ -26,7 +26,11 @@ The gap between *what you're thinking* and *what you type* is where agents go wr
 3. Click the Bard icon in the menu bar to open the window
 4. Right-click the icon → **Settings…** → paste your OpenRouter API key → **Save & Verify Key** → pick a free model
 
-> **Note:** The app is unsigned, so macOS may show a Gatekeeper prompt the first time you launch it. Right-click the app in Finder → **Open** to allow it.
+> **Note:** The app is ad-hoc signed (not notarized). If macOS shows a
+> Gatekeeper prompt the first time you launch it, right-click the app in
+> Finder → **Open** → **Open** to allow it. If you see a "damaged" message,
+> run `xattr -cr /Applications/Bard.app` in Terminal to clear the quarantine
+> attribute.
 
 ## Requirements
 
