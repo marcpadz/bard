@@ -22,8 +22,10 @@ for (const f of ['package.json', 'src-tauri/tauri.conf.json']) {
 console.log('version bumped to $VERSION');
 "
 
-# 2. Build the app bundle (no DMG — we package after signing).
-npm run tauri build -- --no-bundle
+# 2. Build the app bundle. Use a plain `tauri build` (no --no-bundle) so the
+#    .app bundle is actually produced; the DMG is still built explicitly after
+#    signing below so we never package a pre-signing app.
+npm run tauri build
 if [[ ! -d "$APP_BUNDLE" ]]; then
   echo "ERROR: app bundle not produced at $APP_BUNDLE" >&2
   exit 1
