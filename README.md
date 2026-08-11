@@ -44,6 +44,25 @@ npm run tauri build    # build the .app and .dmg
 
 The frontend is React + Vite + TypeScript; the shell is Tauri 2 (Rust).
 
+## Publishing
+
+```bash
+./scripts/publish-release.sh 0.2.0
+```
+
+This bumps the version, builds the DMG, commits and tags, then creates a GitHub
+release with the DMG attached. Users running an older version get a banner in
+the app pointing at the new release.
+
+## Updating the app
+
+Bard checks the GitHub releases feed on launch. When a new version is live:
+
+- A banner appears in the main window — **Update** downloads the new DMG into
+  `~/Downloads` and opens it for you to drag into Applications.
+- Settings → Updates shows the current version, a **Check for Updates** button,
+  and the download progress.
+
 ## How it works
 
 - The prompt-optimizer meta-prompt is a port of the **Augment Input** feature from Dextop's chat composer — it instructs the model to rewrite for specificity, preserve intent/constraints, and return only the rewritten prompt as plain text.
