@@ -1,10 +1,13 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  Bookmark,
   Check,
   Copy,
   Loader2,
+  Save,
   Settings2,
   Square,
   Sparkles,
@@ -26,6 +29,60 @@ function StarsIcon({ size = 16 }: { size?: number }) {
 
 export default function App() {
   const app = useApp();
+  const [saveTitle, setSaveTitle] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  // Non-main windows (saved-prompt viewer) load with ?promptId=… — mount with
+  // the prompt content so double-clicking a saved prompt opens it in a fresh
+  // window without touching the main one.
+  const promptId = new URLSearchParams(window.location.search).get("promptId");
+  const [viewPrompt, setViewPrompt] = useState<string | null>(promptId);
+  const loadedId = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!promptId || loadedId.current === promptId) return;
+    loadedId.current = promptId;
+    invoke<string>("get_prompt_by_id", { id: promptId })
+      .then((text) => setViewPrompt(text))
+      .catch(() => setViewPrompt(""));
+  }, [promptId]);
+
+  const openPromptWindow = useCallback((id: string) => {
+    // New window: URL with the id, viewport sized for the prompt, always on
+    // top. The existing window is left untouched.
+    const label = `prompt-${id}`;
+    void WebviewWindow.getByLabel(label)
+      .then((existing) => {
+        if (existing) {
+          existing.show();
+          existing.setFocus();
+          return;
+        }
+        return new WebviewWindow(label, {
+          url: `index.html?promptId=${encodeURIComponent(id)}`,
+          title: "Saved Prompt",
+          width: 640,
+          height: 520,
+          resizable: true,
+          decorations: true,
+          alwaysOnTop: true,
+          center: true,
+        });
+      })
+      .catch(() => {});
+  }, []);
+
+  const runSave = useCallback(async () => {
+    if (!app.undoState) return;
+    setSaving(true);
+    const ok = await app.doSavePrompt(saveTitle.trim(), app.undoState.after);
+    setSaving(false);
+    if (ok) {
+      setSaveTitle("");
+      app.setSavePanelError("");
+      app.setSavedOpen(true);
+    }
+  }, [app, saveTitle]);
 
   // Native window drag — grab anywhere that isn't an interactive control.
   const startDrag = useCallback((e: React.MouseEvent) => {
@@ -33,6 +90,15 @@ export default function App() {
     if (target.closest("textarea, input, button, select, a")) return;
     getCurrentWindow().startDragging();
   }, []);
+
+  // Viewer windows: no header/settings — plain read-only text.
+  if (viewPrompt !== null) {
+    return (
+      <div className="viewer">
+        <textarea className="viewer-input" readOnly value={viewPrompt} spellCheck={false} />
+      </div>
+    );
+  }
 
   return (
     <div className="app" onMouseDown={startDrag}>
@@ -46,6 +112,13 @@ export default function App() {
         <div className="header-actions">
           <button
             className="icon-btn"
+            title="Saved prompts"
+            onClick={() => app.openSaved()}
+          >
+            <Bookmark size={14} />
+          </button>
+          <button
+            className="icon-btn"
             title="Settings"
             onClick={() => app.setSettingsOpen(true)}
           >
@@ -53,8 +126,8 @@ export default function App() {
           </button>
           <button
             className="icon-btn"
-            title="Close Bard"
-            onClick={() => invoke("exit_app")}
+            title="Hide Bard"
+            onClick={() => getCurrentWindow().hide()}
           >
             <X size={14} />
           </button>
@@ -113,13 +186,22 @@ export default function App() {
             )}
           </button>
           {app.canUndo && !app.augmenting && (
-            <button
-              className="icon-btn"
-              title={app.copied ? "Copied!" : "Copy enriched prompt"}
-              onClick={app.copyResult}
-            >
-              {app.copied ? <Check size={14} /> : <Copy size={14} />}
-            </button>
+            <>
+              <button
+                className="icon-btn"
+                title="Save prompt"
+                onClick={runSave}
+              >
+                <Save size={14} />
+              </button>
+              <button
+                className="icon-btn"
+                title={app.copied ? "Copied!" : "Copy enriched prompt"}
+                onClick={app.copyResult}
+              >
+                {app.copied ? <Check size={14} /> : <Copy size={14} />}
+              </button>
+            </>
           )}
         </div>
 
@@ -136,6 +218,67 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* Saved prompts panel */}
+      {app.savedOpen && (
+        <div className="settings saved-panel">
+          <div className="settings-header">
+            <span>Saved prompts</span>
+            <button className="icon-btn" onClick={app.closeSaved}>
+              <X size={13} />
+            </button>
+          </div>
+
+          <div className="save-row">
+            <input
+              className="save-title"
+              placeholder="Name this prompt…"
+              value={saveTitle}
+              onChange={(e) => {
+                setSaveTitle(e.target.value);
+                app.setSavePanelError("");
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !saving) void runSave();
+              }}
+            />
+            <button className="btn primary" disabled={saving || !app.undoState} onClick={runSave}>
+              <Save size={12} />
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+          {app.savePanelError && <p className="hint err">{app.savePanelError}</p>}
+
+          {!app.savedLoaded ? (
+            <div className="status">
+              <Loader2 size={12} className="spin" />
+              <span>Loading…</span>
+            </div>
+          ) : app.savedPrompts.length === 0 ? (
+            <p className="hint">No saved prompts yet — enrich something and hit Save.</p>
+          ) : (
+            <ul className="saved-list">
+              {app.savedPrompts.map((p) => (
+                <li
+                  key={p.id}
+                  className="saved-item"
+                  title="Double-click to open"
+                  onDoubleClick={() => openPromptWindow(p.id)}
+                >
+                  <span className="saved-title">{p.title || p.text.slice(0, 48)}</span>
+                  <button
+                    className="icon-btn"
+                    title="Delete"
+                    onClick={() => app.doDeletePrompt(p.id)}
+                  >
+                    <X size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Settings panel */}
       {app.settingsOpen && (

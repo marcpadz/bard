@@ -20,6 +20,13 @@ export interface OpenRouterModel {
   } | null;
 }
 
+export interface SavedPrompt {
+  id: string;
+  title: string;
+  text: string;
+  created_at: number;
+}
+
 export function getSettings(): Promise<Settings> {
   return invoke("get_settings");
 }
@@ -30,6 +37,18 @@ export function saveSettings(settings: Settings): Promise<void> {
 
 export function saveLastPrompt(prompt: string): Promise<void> {
   return invoke("save_last_prompt", { prompt });
+}
+
+export function listSavedPrompts(): Promise<SavedPrompt[]> {
+  return invoke("list_saved_prompts");
+}
+
+export function savePrompt(title: string, text: string): Promise<SavedPrompt> {
+  return invoke("save_prompt", { title, text });
+}
+
+export function deletePrompt(id: string): Promise<void> {
+  return invoke("delete_prompt", { id });
 }
 
 export function verifyApiKey(apiKey: string): Promise<void> {

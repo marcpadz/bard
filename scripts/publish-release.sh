@@ -2,7 +2,7 @@
 # Publish a new Bard release: build the DMG, push tags, attach to GitHub Releases.
 set -euo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 VERSION="${1:?Usage: ./scripts/publish-release.sh <version> (e.g. 0.2.0)}"
 REPO="marcpadz/bard"
@@ -29,7 +29,7 @@ codesign --force --deep --sign - "$APP_BUNDLE"
 cp "src-tauri/target/release/bundle/dmg/Bard_${VERSION}_aarch64.dmg" "./Bard_${VERSION}_aarch64.dmg"
 
 # 5. Commit + tag
-git add -A
+git add package.json src-tauri/tauri.conf.json
 git commit -m "Release v${VERSION}" || true
 git tag "v${VERSION}"
 git push origin main --tags

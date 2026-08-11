@@ -30,7 +30,10 @@ fn main() {
             settings::save_settings,
             settings::toggle_dock_icon,
             settings::save_last_prompt,
-            settings::exit_app,
+            settings::list_saved_prompts,
+            settings::save_prompt,
+            settings::delete_prompt,
+            settings::get_prompt_by_id,
             updates::download_update
         ])
         .setup(|app| {

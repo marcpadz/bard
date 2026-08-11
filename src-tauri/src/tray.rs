@@ -58,6 +58,7 @@ pub fn create_tray(app: &App) -> tauri::Result<()> {
             {
                 let app = tray.app_handle();
                 if let Some(window) = app.get_webview_window("main") {
+                    // Open on single click; clicking again hides.
                     if window.is_visible().unwrap_or(false) {
                         let _ = window.hide();
                     } else {

@@ -4,13 +4,17 @@ import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   completePrompt,
+  deletePrompt,
   fetchFreeModels,
   getSettings,
+  listSavedPrompts,
   onOpenSettings,
   optimizePrompt,
   saveLastPrompt,
+  savePrompt,
   saveSettings,
   type OpenRouterModel,
+  type SavedPrompt,
   type Settings,
 } from "../lib/api";
 import { checkForUpdate, downloadAndInstallUpdate, type UpdateInfo } from "../lib/updates";
@@ -25,6 +29,11 @@ export function useApp() {
   const [models, setModels] = useState<OpenRouterModel[]>([]);
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [savedOpen, setSavedOpen] = useState(false);
+  const [savedPrompts, setSavedPrompts] = useState<SavedPrompt[]>([]);
+  const [savedLoaded, setSavedLoaded] = useState(false);
+  const [savedError, setSavedError] = useState<string | null>(null);
+  const [savePanelError, setSavePanelError] = useState<string | null>(null);
 
   // update state
   const [appVersion, setAppVersion] = useState("");
@@ -47,6 +56,10 @@ export function useApp() {
   const [undoState, setUndoState] = useState<{ before: string; after: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  // Guards against double-firing on effect re-run (React StrictMode) so the
+  // second invocation aborts the first instead of running two requests.
+  const augmentRunRef = useRef(false);
+  const augmentingRef = useRef(false);
 
   // Load persisted settings on mount.
   useEffect(() => {
@@ -161,6 +174,7 @@ export function useApp() {
   const canUndo = undoState !== null && input === undoState.after;
 
   const augment = useCallback(async () => {
+    if (augmentingRef.current) return;
     const text = input.trim();
     if (!text || augmenting || !settings) return;
     if (!settings.api_key) {
@@ -173,6 +187,15 @@ export function useApp() {
     }
     const controller = new AbortController();
     abortRef.current = controller;
+    // StrictMode (and any re-render re-dispatch) can invoke augment twice back
+    // to back; only the first run may proceed — the second aborts the first.
+    if (augmentRunRef.current) {
+      abortRef.current = null;
+      controller.abort();
+      return;
+    }
+    augmentRunRef.current = true;
+    augmentingRef.current = true;
     setAugmenting(true);
     try {
       const prompt = optimizePrompt(text);
@@ -187,11 +210,15 @@ export function useApp() {
       alert(err instanceof Error && err.message ? err.message : "Couldn't augment the input");
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
+      augmentRunRef.current = false;
+      augmentingRef.current = false;
       setAugmenting(false);
     }
   }, [input, augmenting, settings]);
 
   const cancel = useCallback(() => {
+    augmentRunRef.current = false;
+    augmentingRef.current = false;
     abortRef.current?.abort();
     abortRef.current = null;
     setAugmenting(false);
@@ -214,6 +241,48 @@ export function useApp() {
       alert("Couldn't copy to clipboard");
     }
   }, [undoState]);
+
+  // Saved prompts: list + actions.
+  const refreshSaved = useCallback(async () => {
+    setSavedError(null);
+    try {
+      setSavedPrompts(await listSavedPrompts());
+    } catch (err) {
+      setSavedError(err instanceof Error && err.message ? err.message : "Couldn't load saved prompts");
+    } finally {
+      setSavedLoaded(true);
+    }
+  }, []);
+
+  const openSaved = useCallback(async () => {
+    setSavedOpen(true);
+    if (!savedLoaded) await refreshSaved();
+  }, [savedLoaded, refreshSaved]);
+
+  const closeSaved = useCallback(() => setSavedOpen(false), []);
+
+  const doSavePrompt = useCallback(async (title: string, text: string): Promise<boolean> => {
+    setSavePanelError(null);
+    try {
+      await savePrompt(title, text);
+      return true;
+    } catch (err) {
+      setSavePanelError(err instanceof Error && err.message ? err.message : "Couldn't save the prompt");
+      return false;
+    }
+  }, []);
+
+  const doDeletePrompt = useCallback(
+    async (id: string) => {
+      try {
+        await deletePrompt(id);
+        setSavedPrompts((prev) => prev.filter((p) => p.id !== id));
+      } catch (err) {
+        alert(err instanceof Error && err.message ? err.message : "Couldn't delete the saved prompt");
+      }
+    },
+    [],
+  );
 
   // Settings: verify the API key, then load free models.
   const verifyAndFetch = useCallback(async () => {
@@ -275,6 +344,7 @@ export function useApp() {
     setInput,
     augmenting,
     canUndo,
+    undoState,
     copied,
     augment,
     cancel,
@@ -282,6 +352,18 @@ export function useApp() {
     copyResult,
     settingsOpen,
     setSettingsOpen,
+    savedOpen,
+    setSavedOpen,
+    openSaved,
+    closeSaved,
+    savedPrompts,
+    savedLoaded,
+    savedError,
+    refreshSaved,
+    doSavePrompt,
+    doDeletePrompt,
+    savePanelError,
+    setSavePanelError,
     models,
     modelsLoaded,
     keyInput,

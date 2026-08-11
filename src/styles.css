@@ -401,3 +401,96 @@ body {
 .check input {
   accent-color: var(--accent);
 }
+
+/* ── Saved prompts panel ── */
+.save-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.save-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 12.5px;
+  outline: none;
+  font-family: inherit;
+}
+
+.save-row input:focus {
+  border-color: var(--accent);
+}
+
+.save-row .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.saved-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.saved-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  cursor: default;
+  font-size: 12.5px;
+  user-select: none;
+}
+
+.saved-item:hover {
+  border-color: var(--accent);
+}
+
+.saved-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Saved-prompt viewer window ── */
+.viewer {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.viewer-input {
+  flex: 1;
+  width: 100%;
+  resize: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  outline: none;
+  font-family: inherit;
+  user-select: text;
+  overflow: auto;
+}
