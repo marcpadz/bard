@@ -62,10 +62,14 @@ the app pointing at the new release.
 
 Bard checks the GitHub releases feed on launch. When a new version is live:
 
-- A banner appears in the main window — **Update** downloads the new DMG into
-  `~/Downloads` and opens it for you to drag into Applications.
+- A banner appears in the main window — **Update** downloads the new DMG,
+  replaces the installed Bard.app in place, and relaunches automatically.
 - Settings → Updates shows the current version, a **Check for Updates** button,
   and the download progress.
+
+If the app can't find the installed copy (e.g. it was launched from the DMG),
+the update falls back to leaving the DMG in `~/Downloads` for a manual
+drag-into-Applications install.
 
 ## How it works
 

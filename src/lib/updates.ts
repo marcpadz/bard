@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
+import { listen } from "@tauri-apps/api/event";
 
 const GITHUB_REPO = "marcpadz/bard";
 const GITHUB_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
@@ -61,10 +62,16 @@ export async function checkForUpdate(): Promise<{ available: boolean; info: Upda
 }
 
 /**
- * Download the DMG for the given release version into Downloads and open it.
- * Uses a Rust command so we don't need CSP exceptions for redirects/blob.
+ * Download the DMG for the given release version, install it in place, and
+ * relaunch the app. The Rust side emits `update-downloaded` once the new app
+ * is in place, at which point we trigger the relaunch.
  */
 export async function downloadAndInstallUpdate(version: string): Promise<void> {
   const url = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/Bard_${version}_aarch64.dmg`;
   await invoke("download_update", { url, version });
+}
+
+/** Resolve once the installed app signals it's ready to relaunch. */
+export function onUpdateDownloaded(cb: () => void): Promise<() => void> {
+  return listen("update-downloaded", cb);
 }

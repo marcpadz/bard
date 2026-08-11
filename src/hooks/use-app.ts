@@ -17,7 +17,7 @@ import {
   type SavedPrompt,
   type Settings,
 } from "../lib/api";
-import { checkForUpdate, downloadAndInstallUpdate, type UpdateInfo } from "../lib/updates";
+import { checkForUpdate, downloadAndInstallUpdate, onUpdateDownloaded, type UpdateInfo } from "../lib/updates";
 
 export interface UiState {
   augmenting: boolean;
@@ -41,6 +41,7 @@ export function useApp() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [downloadingUpdate, setDownloadingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
 
   // settings panel transient state
@@ -138,10 +139,33 @@ export function useApp() {
     setDownloadingUpdate(true);
     setDownloadProgress(0);
     try {
+      // The Rust side emits update-downloaded once the new app is in place;
+      // we then relaunch. (Timeout is only a fallback.)
+      const relaunch = new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          void unlisten?.();
+          resolve();
+        }, 120_000);
+        let unlisten: (() => void) | undefined;
+        onUpdateDownloaded(() => {
+          clearTimeout(timer);
+          void unlisten?.();
+          resolve();
+        }).then((fn) => (unlisten = fn));
+      });
       await downloadAndInstallUpdate(updateInfo.version);
+      await relaunch;
+      setInstallingUpdate(true);
+      // Tiny pause so the "Installing…" state is visible before the app quits.
+      setTimeout(() => {
+        try {
+          getCurrentWindow().destroy();
+        } catch {
+          invoke("exit_app").catch(() => {});
+        }
+      }, 150);
     } catch (err) {
       setUpdateError(err instanceof Error ? err.message : "Update download failed");
-    } finally {
       setDownloadingUpdate(false);
     }
   }, [updateInfo]);
@@ -385,6 +409,7 @@ export function useApp() {
     checkingUpdate,
     updateError,
     downloadingUpdate,
+    installingUpdate,
     downloadProgress,
     checkUpdate,
     downloadUpdate,

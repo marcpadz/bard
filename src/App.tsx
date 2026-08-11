@@ -363,14 +363,16 @@ export default function App() {
                 </p>
                 <button
                   className="btn primary"
-                  disabled={app.downloadingUpdate}
+                  disabled={app.downloadingUpdate || app.installingUpdate}
                   onClick={app.downloadUpdate}
                 >
-                  {app.downloadingUpdate
-                    ? app.downloadProgress !== null && app.downloadProgress > 0
-                      ? `Downloading… ${Math.round(app.downloadProgress)}%`
-                      : "Downloading…"
-                    : `Update to v${app.updateInfo.version}`}
+                  {app.installingUpdate
+                    ? "Installing…"
+                    : app.downloadingUpdate
+                      ? app.downloadProgress !== null && app.downloadProgress > 0
+                        ? `Downloading… ${Math.round(app.downloadProgress)}%`
+                        : "Downloading…"
+                      : `Update to v${app.updateInfo.version}`}
                 </button>
                 {app.downloadingUpdate && app.downloadProgress !== null && (
                   <div className="progress">
