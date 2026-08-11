@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <!-- Background: soft rounded square (squircle) -->
+  <rect width="1024" height="1024" rx="228" fill="#1A1A2E"/>
+  
+  <!-- Three concentric arcs suggesting enrichment/expansion -->
+  <path d="M512 220 C640 220, 744 324, 744 452" stroke="#E8D5B7" stroke-width="52" stroke-linecap="round" fill="none" opacity="0.35"/>
+  <path d="M512 340 C606 340, 684 418, 684 512" stroke="#E8D5B7" stroke-width="52" stroke-linecap="round" fill="none" opacity="0.55"/>
+  <path d="M512 460 C566 460, 620 514, 620 568" stroke="#E8D5B7" stroke-width="52" stroke-linecap="round" fill="none" opacity="0.85"/>
+  
+  <!-- Center spark dot -->
+  <circle cx="512" cy="580" r="48" fill="#E8D5B7"/>
+  
+  <!-- Small decorative sparkles -->
+  <circle cx="380" cy="360" r="22" fill="#E8D5B7" opacity="0.45"/>
+  <circle cx="420" cy="680" r="16" fill="#E8D5B7" opacity="0.3"/>
+  <circle cx="640" cy="640" r="18" fill="#E8D5B7" opacity="0.35"/>
+</svg>

@@ -1,0 +1,111 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+
+export const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
+
+export interface Settings {
+  api_key: string;
+  model: string;
+  launch_at_login: boolean;
+  last_prompt: string;
+}
+
+export interface OpenRouterModel {
+  id: string;
+  name: string;
+  pricing: {
+    prompt?: string | null;
+    completion?: string | null;
+    request?: string | null;
+  } | null;
+}
+
+export function getSettings(): Promise<Settings> {
+  return invoke("get_settings");
+}
+
+export function saveSettings(settings: Settings): Promise<void> {
+  return invoke("save_settings", { settings });
+}
+
+export function saveLastPrompt(prompt: string): Promise<void> {
+  return invoke("save_last_prompt", { prompt });
+}
+
+export function verifyApiKey(apiKey: string): Promise<void> {
+  return invoke("verify_api_key", { apiKey });
+}
+
+export function fetchFreeModels(apiKey: string): Promise<OpenRouterModel[]> {
+  return invoke("fetch_free_models", { apiKey });
+}
+
+export function onOpenSettings(cb: () => void): Promise<() => void> {
+  return listen("open-settings", cb);
+}
+
+/** Port of DexTop's `optimizePrompt` meta-prompt (frontend/src/lib/augment.ts). */
+export function optimizePrompt(text: string): string {
+  return [
+    "You are a prompt optimizer. Rewrite the user's prompt below so it is",
+    "specific, unambiguous, and context-rich, letting an AI agent execute it",
+    "with minimal assumptions on decision-driven tasks. Preserve the user's",
+    "original intent, scope, and any constraints they stated — do not invent",
+    "new requirements. Do NOT answer or perform the task. Do NOT add preamble,",
+    "commentary, or explanation. Return ONLY the rewritten prompt as plain text.",
+    "",
+    "<user_prompt>",
+    text,
+    "</user_prompt>",
+  ].join("\n");
+}
+
+/** Single-shot chat completion against OpenRouter (no tools, plain text out). */
+export async function completePrompt(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  signal?: AbortSignal,
+  timeoutMs = 90_000,
+): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "HTTP-Referer": "https://bard.local",
+        "X-Title": "Bard",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.4,
+        max_tokens: 4000,
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`OpenRouter request failed (HTTP ${res.status})`);
+    }
+    const data = await res.json();
+    const text = data?.choices?.[0]?.message?.content;
+    if (typeof text !== "string" || !text.trim()) {
+      throw new Error("Augment returned an empty result");
+    }
+    return text.trim();
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error("Augment was cancelled or timed out");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
