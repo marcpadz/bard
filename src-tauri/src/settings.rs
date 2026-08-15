@@ -9,6 +9,7 @@ pub struct Settings {
     pub api_key: String,
     pub model: String,
     pub launch_at_login: bool,
+    pub show_dock: bool,
     pub last_prompt: String,
 }
 
@@ -18,6 +19,7 @@ impl Default for Settings {
             api_key: String::new(),
             model: String::new(),
             launch_at_login: false,
+            show_dock: false,
             last_prompt: String::new(),
         }
     }
@@ -105,6 +107,19 @@ pub fn delete_prompt(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let prompts = load_saved_prompts(&app);
     let remaining: Vec<SavedPrompt> = prompts.into_iter().filter(|p| p.id != id).collect();
     write_saved_prompts(&app, &remaining)
+}
+
+#[tauri::command]
+pub fn rename_prompt(app: tauri::AppHandle, id: String, title: String) -> Result<(), String> {
+    let mut prompts = load_saved_prompts(&app);
+    let target = prompts.iter_mut().find(|p| p.id == id);
+    match target {
+        Some(p) => {
+            p.title = title.trim().to_string();
+            write_saved_prompts(&app, &prompts)
+        }
+        None => Err("Saved prompt not found".into()),
+    }
 }
 
 #[tauri::command]

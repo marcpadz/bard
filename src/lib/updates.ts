@@ -75,3 +75,13 @@ export async function downloadAndInstallUpdate(version: string): Promise<void> {
 export function onUpdateDownloaded(cb: () => void): Promise<() => void> {
   return listen("update-downloaded", cb);
 }
+
+/** Resolve once the Rust side signals that the update failed. Payload is the error string. */
+export function onUpdateFailed(cb: (error: string) => void): Promise<() => void> {
+  return listen<string>("update-download-failed", (event) => cb(event.payload));
+}
+
+/** Called with the download progress percentage (0-100). */
+export function onUpdateProgress(cb: (percent: number) => void): Promise<() => void> {
+  return listen<number>("update-download-progress", (event) => cb(event.payload));
+}

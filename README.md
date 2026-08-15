@@ -21,7 +21,7 @@ The gap between *what you're thinking* and *what you type* is where agents go wr
 
 ## Install
 
-1. Download `Bard_0.1.0_aarch64.dmg` from [Releases](../../releases)
+1. Download `Bard_0.4.0_aarch64.dmg` from [Releases](../../releases)
 2. Open it and drag **Bard.app** into your Applications folder
 3. Click the Bard icon in the menu bar to open the window
 4. Right-click the icon → **Settings…** → paste your OpenRouter API key → **Save & Verify Key** → pick a free model

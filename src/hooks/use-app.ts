@@ -10,14 +10,16 @@ import {
   listSavedPrompts,
   onOpenSettings,
   optimizePrompt,
+  renamePrompt,
   saveLastPrompt,
   savePrompt,
   saveSettings,
+  writeClipboard,
   type OpenRouterModel,
   type SavedPrompt,
   type Settings,
 } from "../lib/api";
-import { checkForUpdate, downloadAndInstallUpdate, onUpdateDownloaded, type UpdateInfo } from "../lib/updates";
+import { checkForUpdate, downloadAndInstallUpdate, onUpdateDownloaded, onUpdateFailed, onUpdateProgress, type UpdateInfo } from "../lib/updates";
 
 export interface UiState {
   augmenting: boolean;
@@ -28,6 +30,7 @@ export function useApp() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [models, setModels] = useState<OpenRouterModel[]>([]);
   const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [modelCount, setModelCount] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [savedOpen, setSavedOpen] = useState(false);
   const [savedPrompts, setSavedPrompts] = useState<SavedPrompt[]>([]);
@@ -48,6 +51,7 @@ export function useApp() {
   const [keyInput, setKeyInput] = useState("");
   const [modelSelect, setModelSelect] = useState("");
   const [launchAtLogin, setLaunchAtLogin] = useState(false);
+  const [showDock, setShowDock] = useState(false);
   const [verifyStatus, setVerifyStatus] = useState<"idle" | "verifying" | "ok" | "error">("idle");
   const [verifyError, setVerifyError] = useState("");
 
@@ -57,6 +61,14 @@ export function useApp() {
   const [undoState, setUndoState] = useState<{ before: string; after: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Global error toast. window.alert() is a silent no-op inside Tauri's
+  // webview, so every error path must surface in-app instead of via alert().
+  // A small stack (not a single message) so two errors in quick succession
+  // don't clobber each other — each entry has its own auto-dismiss timer.
+  const [errors, setErrors] = useState<{ id: number; message: string }[]>([]);
+  const errorTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+  const errorSeq = useRef(0);
   // Guards against double-firing on effect re-run (React StrictMode) so the
   // second invocation aborts the first instead of running two requests.
   const augmentRunRef = useRef(false);
@@ -72,12 +84,14 @@ export function useApp() {
         setKeyInput(s.api_key);
         setModelSelect(s.model);
         setLaunchAtLogin(s.launch_at_login);
+        setShowDock(s.show_dock);
         if (s.last_prompt) setInput(s.last_prompt);
         if (s.api_key) {
           fetchFreeModels(s.api_key)
             .then((m) => {
               if (mounted) {
                 setModels(m);
+                setModelCount(m.length);
                 setModelsLoaded(true);
               }
             })
@@ -136,25 +150,60 @@ export function useApp() {
 
   const downloadUpdate = useCallback(async () => {
     if (!updateInfo) return;
+    // Synchronous guard: a fast second click can slip past the async
+    // setDownloadingUpdate, spawning two downloads. Check + set up front.
+    if (downloadingUpdate) return;
     setDownloadingUpdate(true);
     setDownloadProgress(0);
+    setUpdateError(null);
+
+    // Subscribe to progress events from the Rust side.
+    let unlistenProgress: (() => void) | undefined;
+    onUpdateProgress((percent) => {
+      setDownloadProgress(percent);
+    }).then((fn) => (unlistenProgress = fn));
+
     try {
-      // The Rust side emits update-downloaded once the new app is in place;
-      // we then relaunch. (Timeout is only a fallback.)
-      const relaunch = new Promise<void>((resolve) => {
+      // Race between success and failure events from the Rust side.
+      const outcome = new Promise<"ok" | string>((resolve) => {
+        let unlistenOk: (() => void) | undefined;
+        let unlistenFail: (() => void) | undefined;
         const timer = setTimeout(() => {
-          void unlisten?.();
-          resolve();
+          void unlistenOk?.();
+          void unlistenFail?.();
+          resolve("Update timed out — please try again.");
         }, 120_000);
-        let unlisten: (() => void) | undefined;
+
         onUpdateDownloaded(() => {
           clearTimeout(timer);
-          void unlisten?.();
-          resolve();
-        }).then((fn) => (unlisten = fn));
+          void unlistenOk?.();
+          void unlistenFail?.();
+          resolve("ok");
+        }).then((fn) => (unlistenOk = fn));
+
+        onUpdateFailed((error) => {
+          clearTimeout(timer);
+          void unlistenOk?.();
+          void unlistenFail?.();
+          resolve(error);
+        }).then((fn) => (unlistenFail = fn));
       });
+
+      // Kick off the download+install on the Rust side.
       await downloadAndInstallUpdate(updateInfo.version);
-      await relaunch;
+
+      // Wait for either success or failure.
+      const result = await outcome;
+
+      void unlistenProgress?.();
+
+      if (result !== "ok") {
+        setUpdateError(result);
+        setDownloadingUpdate(false);
+        setInstallingUpdate(false);
+        return;
+      }
+
       setInstallingUpdate(true);
       // Tiny pause so the "Installing…" state is visible before the app quits.
       setTimeout(() => {
@@ -165,10 +214,29 @@ export function useApp() {
         }
       }, 150);
     } catch (err) {
+      void unlistenProgress?.();
       setUpdateError(err instanceof Error ? err.message : "Update download failed");
       setDownloadingUpdate(false);
+      setInstallingUpdate(false);
     }
-  }, [updateInfo]);
+  }, [updateInfo, downloadingUpdate]);
+
+  const reportError = useCallback((message: string) => {
+    const id = errorSeq.current++;
+    setErrors((prev) => [...prev, { id, message }]);
+    const timer = setTimeout(() => {
+      setErrors((prev) => prev.filter((e) => e.id !== id));
+      errorTimers.current.delete(id);
+    }, 4000);
+    errorTimers.current.set(id, timer);
+  }, []);
+
+  const dismissError = useCallback((id: number) => {
+    const timer = errorTimers.current.get(id);
+    if (timer) clearTimeout(timer);
+    errorTimers.current.delete(id);
+    setErrors((prev) => prev.filter((e) => e.id !== id));
+  }, []);
 
   // Auto-hide window on blur (click outside) with a grace period so the tray
   // toggle still works — the Rust handler hides/shows before the timer fires.
@@ -179,6 +247,9 @@ export function useApp() {
     let unlistenFocus: (() => void) | undefined;
     win.listen("tauri://blur", () => {
       timeout = setTimeout(() => {
+        // User navigated away while augmenting — cancel the in-flight request
+        // so it doesn't burn an API call in the background.
+        abortRef.current?.abort();
         win.hide();
       }, 200);
     }).then((fn) => (unlistenBlur = fn));
@@ -231,7 +302,7 @@ export function useApp() {
       saveLastPrompt(result).catch(() => {});
     } catch (err) {
       if (controller.signal.aborted) return;
-      alert(err instanceof Error && err.message ? err.message : "Couldn't augment the input");
+      reportError(err instanceof Error && err.message ? err.message : "Couldn't augment the input");
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
       augmentRunRef.current = false;
@@ -257,14 +328,14 @@ export function useApp() {
 
   const copyResult = useCallback(async () => {
     if (!undoState) return;
-    try {
-      await navigator.clipboard.writeText(undoState.after);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      alert("Couldn't copy to clipboard");
+    const ok = await writeClipboard(undoState.after);
+    if (!ok) {
+      reportError("Couldn't copy to clipboard");
+      return;
     }
-  }, [undoState]);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }, [undoState, reportError]);
 
   // Saved prompts: list + actions.
   const refreshSaved = useCallback(async () => {
@@ -300,13 +371,24 @@ export function useApp() {
     async (id: string) => {
       try {
         await deletePrompt(id);
-        setSavedPrompts((prev) => prev.filter((p) => p.id !== id));
-      } catch (err) {
-        alert(err instanceof Error && err.message ? err.message : "Couldn't delete the saved prompt");
-      }
-    },
-    [],
-  );
+      setSavedPrompts((prev) => prev.filter((p) => p.id !== id));
+    } catch (err) {
+      reportError(err instanceof Error && err.message ? err.message : "Couldn't delete the saved prompt");
+    }
+  },
+  [reportError],
+);
+
+  const renameSaved = useCallback(async (id: string, title: string) => {
+    try {
+      await renamePrompt(id, title);
+      setSavedPrompts((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, title } : p)),
+      );
+    } catch (err) {
+      reportError(err instanceof Error && err.message ? err.message : "Couldn't rename the saved prompt");
+    }
+  }, [reportError]);
 
   // Settings: verify the API key, then load free models.
   const verifyAndFetch = useCallback(async () => {
@@ -319,12 +401,13 @@ export function useApp() {
     setVerifyStatus("verifying");
     setVerifyError("");
     try {
-      await saveSettings({ ...(settings ?? { api_key: "", model: "", launch_at_login: false, last_prompt: "" }), api_key: key });
+      await saveSettings({ ...(settings ?? { api_key: "", model: "", launch_at_login: false, show_dock: false, last_prompt: "" }), api_key: key });
       const list = await fetchFreeModels(key);
       setModels(list);
+      setModelCount(list.length);
       setModelsLoaded(true);
       setVerifyStatus("ok");
-      const next = { ...(settings ?? { api_key: "", model: "", launch_at_login: false, last_prompt: "" }), api_key: key };
+      const next = { ...(settings ?? { api_key: "", model: "", launch_at_login: false, show_dock: false, last_prompt: "" }), api_key: key };
       if (!next.model || !list.some((m) => m.id === next.model)) {
         if (list.length > 0) next.model = list[0].id;
       }
@@ -338,7 +421,7 @@ export function useApp() {
 
   const saveModel = useCallback(
     async (modelId: string) => {
-      const next = { ...(settings ?? { api_key: "", model: "", launch_at_login: false, last_prompt: "" }), model: modelId };
+      const next = { ...(settings ?? { api_key: "", model: "", launch_at_login: false, show_dock: false, last_prompt: "" }), model: modelId };
       setSettings(next);
       setModelSelect(modelId);
       await saveSettings(next);
@@ -347,7 +430,7 @@ export function useApp() {
   );
 
   const toggleLaunchAtLogin = useCallback(async () => {
-    const next = { ...(settings ?? { api_key: "", model: "", launch_at_login: false, last_prompt: "" }), launch_at_login: !launchAtLogin };
+    const next = { ...(settings ?? { api_key: "", model: "", launch_at_login: false, show_dock: false, last_prompt: "" }), launch_at_login: !launchAtLogin };
     setLaunchAtLogin(next.launch_at_login);
     setSettings(next);
     try {
@@ -358,9 +441,21 @@ export function useApp() {
       }
       await saveSettings(next);
     } catch (err) {
-      alert(err instanceof Error && err.message ? err.message : "Couldn't update launch-at-login");
+      reportError(err instanceof Error && err.message ? err.message : "Couldn't update launch-at-login");
     }
-  }, [settings, launchAtLogin]);
+  }, [settings, launchAtLogin, reportError]);
+
+  const toggleDockIcon = useCallback(async () => {
+    const next = { ...(settings ?? { api_key: "", model: "", launch_at_login: false, show_dock: false, last_prompt: "" }), show_dock: !showDock };
+    setShowDock(next.show_dock);
+    setSettings(next);
+    try {
+      await invoke("toggle_dock_icon", { show: next.show_dock });
+      await saveSettings(next);
+    } catch (err) {
+      reportError(err instanceof Error && err.message ? err.message : "Couldn't toggle the Dock icon");
+    }
+  }, [settings, showDock, reportError]);
 
   return {
     settings,
@@ -370,6 +465,8 @@ export function useApp() {
     canUndo,
     undoState,
     copied,
+    errors,
+    dismissError,
     augment,
     cancel,
     undo,
@@ -386,16 +483,20 @@ export function useApp() {
     refreshSaved,
     doSavePrompt,
     doDeletePrompt,
+    renameSaved,
     savePanelError,
     setSavePanelError,
     models,
     modelsLoaded,
+    modelCount,
     keyInput,
     setKeyInput,
     modelSelect,
     setModelSelect,
     launchAtLogin,
     setLaunchAtLogin,
+    showDock,
+    toggleDockIcon,
     verifyStatus,
     verifyError,
     setVerifyStatus,

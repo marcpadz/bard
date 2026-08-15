@@ -34,6 +34,7 @@ pub fn create_tray(app: &App) -> tauri::Result<()> {
         .tooltip("Bard — Prompt Enricher")
         .menu(&menu)
         .icon_as_template(false)
+        .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_window(app),
             "hide" => {
@@ -109,8 +110,15 @@ fn show_window(app: &tauri::AppHandle) {
 fn set_window_pos(window: &tauri::WebviewWindow, center_x: f64) {
     let mut x = center_x - WINDOW_WIDTH / 2.0;
 
-    // Clamp so the window stays fully within the current monitor.
-    if let Ok(Some(monitor)) = window.current_monitor() {
+    // Clamp so the window stays fully within the current monitor. Fall back to
+    // the primary monitor if current_monitor() errors or returns nothing
+    // (some multi-display / focus states expose no monitor).
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
         let scale = monitor.scale_factor();
         let screen_w = monitor.size().width as f64 / scale;
         if x < 8.0 {

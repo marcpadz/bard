@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { useApp } from "./hooks/use-app";
+import { writeClipboard } from "./lib/api";
 import "./styles.css";
 
 /** Sparkles icon — geometry ported from DexTop's augment-input-popover. */
@@ -31,6 +32,8 @@ export default function App() {
   const app = useApp();
   const [saveTitle, setSaveTitle] = useState("");
   const [saving, setSaving] = useState(false);
+  const [renameId, setRenameId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   // Non-main windows (saved-prompt viewer) load with ?promptId=… — mount with
   // the prompt content so double-clicking a saved prompt opens it in a fresh
@@ -38,6 +41,15 @@ export default function App() {
   const promptId = new URLSearchParams(window.location.search).get("promptId");
   const [viewPrompt, setViewPrompt] = useState<string | null>(promptId);
   const loadedId = useRef<string | null>(null);
+  const [viewerCopied, setViewerCopied] = useState(false);
+
+  const copyViewPrompt = useCallback(async () => {
+    if (viewPrompt === null) return;
+    const ok = await writeClipboard(viewPrompt);
+    if (!ok) return;
+    setViewerCopied(true);
+    setTimeout(() => setViewerCopied(false), 1500);
+  }, [viewPrompt]);
 
   useEffect(() => {
     if (!promptId || loadedId.current === promptId) return;
@@ -91,17 +103,68 @@ export default function App() {
     getCurrentWindow().startDragging();
   }, []);
 
-  // Viewer windows: no header/settings — plain read-only text.
+  // Keyboard shortcuts: ⌘↵ augment / ⌘C copy / ⌘S save / Esc hide. Ignore when
+  // focus is in a panel input (let the textarea handle its own keys).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Viewer windows use their own DOM; never run main-win shortcuts there.
+      if (viewPrompt !== null) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (e.key === "Escape") {
+        getCurrentWindow().hide();
+        return;
+      }
+      if (!mod) return;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (app.canUndo) app.undo();
+        else app.augment();
+      } else if (e.key.toLowerCase() === "c" && app.canUndo) {
+        e.preventDefault();
+        void app.copyResult();
+      } else if (e.key.toLowerCase() === "s" && app.undoState) {
+        e.preventDefault();
+        void runSave();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [app, runSave, viewPrompt]);
+
+  // Viewer windows: no header/settings — plain read-only text with a Copy
+  // button so the whole point (reuse the prompt) is a single click.
   if (viewPrompt !== null) {
     return (
       <div className="viewer">
         <textarea className="viewer-input" readOnly value={viewPrompt} spellCheck={false} />
+        <button className="btn primary viewer-copy" onClick={copyViewPrompt}>
+          {viewerCopied ? <Check size={13} /> : <Copy size={13} />}
+          {viewerCopied ? "Copied!" : "Copy"}
+        </button>
       </div>
     );
   }
 
   return (
     <div className="app" onMouseDown={startDrag}>
+      {/* Global error toast stack — replaces window.alert(), a silent no-op
+          inside Tauri's webview. Multiple errors stack instead of clobbering. */}
+      {app.errors.length > 0 && (
+        <div className="toast-stack">
+          {app.errors.map((e) => (
+            <div
+              key={e.id}
+              className="toast err"
+              role="alert"
+              onClick={() => app.dismissError(e.id)}
+            >
+              {e.message}
+              <X size={12} className="toast-close" />
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Header */}
       <header className="header">
         <span className="logo">
@@ -217,6 +280,14 @@ export default function App() {
             <span>Prompt enriched</span>
           </div>
         )}
+
+        {/* First-run onboarding: no key yet, nothing enriched — point the user
+            at Settings instead of letting them bump into Augment and bounce. */}
+        {!app.settings?.api_key && !app.canUndo && !app.augmenting && (
+          <div className="hint onboarding" onClick={() => app.setSettingsOpen(true)}>
+            Add a free OpenRouter key in Settings to start →
+          </div>
+        )}
       </main>
 
       {/* Saved prompts panel */}
@@ -249,6 +320,8 @@ export default function App() {
           </div>
           {app.savePanelError && <p className="hint err">{app.savePanelError}</p>}
 
+          {app.savedError && <p className="hint err">{app.savedError}</p>}
+
           {!app.savedLoaded ? (
             <div className="status">
               <Loader2 size={12} className="spin" />
@@ -257,25 +330,57 @@ export default function App() {
           ) : app.savedPrompts.length === 0 ? (
             <p className="hint">No saved prompts yet — enrich something and hit Save.</p>
           ) : (
-            <ul className="saved-list">
-              {app.savedPrompts.map((p) => (
-                <li
-                  key={p.id}
-                  className="saved-item"
-                  title="Double-click to open"
-                  onDoubleClick={() => openPromptWindow(p.id)}
-                >
-                  <span className="saved-title">{p.title || p.text.slice(0, 48)}</span>
-                  <button
-                    className="icon-btn"
-                    title="Delete"
-                    onClick={() => app.doDeletePrompt(p.id)}
+              <ul className="saved-list">
+                {app.savedPrompts.map((p) => (
+                  <li
+                    key={p.id}
+                    className="saved-item"
+                    title="Double-click to open"
+                    onDoubleClick={() => openPromptWindow(p.id)}
                   >
-                    <X size={12} />
-                  </button>
-                </li>
-              ))}
-            </ul>
+                    {renameId === p.id ? (
+                      <input
+                        className="saved-rename"
+                        autoFocus
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            void app.renameSaved(p.id, renameValue.trim());
+                            setRenameId(null);
+                          } else if (e.key === "Escape") {
+                            setRenameId(null);
+                          }
+                        }}
+                        onBlur={() => {
+                          if (renameId === p.id) {
+                            if (renameValue.trim()) void app.renameSaved(p.id, renameValue.trim());
+                            setRenameId(null);
+                          }
+                        }}
+                      />
+                    ) : (
+                      <span
+                        className="saved-title"
+                        title="Click to rename"
+                        onClick={() => {
+                          setRenameId(p.id);
+                          setRenameValue(p.title);
+                        }}
+                      >
+                        {p.title || p.text.slice(0, 48)}
+                      </span>
+                    )}
+                    <button
+                      className="icon-btn"
+                      title="Delete"
+                      onClick={() => app.doDeletePrompt(p.id)}
+                    >
+                      <X size={12} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
           )}
         </div>
       )}
@@ -333,6 +438,12 @@ export default function App() {
             </select>
           </label>
 
+          {/* Model-picker discoverability: surface the verified free-model
+              count so it's obvious why the dropdown is now enabled. */}
+          {app.verifyStatus === "ok" && app.modelCount > 0 && (
+            <p className="hint ok">Verified key → {app.modelCount} free models loaded.</p>
+          )}
+
           <label className="check">
             <input
               type="checkbox"
@@ -340,6 +451,15 @@ export default function App() {
               onChange={app.toggleLaunchAtLogin}
             />
             <span>Launch Bard at login</span>
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={app.showDock}
+              onChange={app.toggleDockIcon}
+            />
+            <span>Show Dock icon</span>
           </label>
 
           {/* Updates */}

@@ -1,6 +1,35 @@
 use serde::{Deserialize, Serialize};
+use std::sync::{Mutex, OnceLock};
 
 pub const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
+
+/// Shared blocking client with a connection pool — building a fresh
+/// `Client::new()` on every key-verify / model-fetch call is wasteful.
+fn http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("failed to build OpenRouter HTTP client")
+    })
+}
+
+/// Cache the free-model list so re-opening Settings (or re-mounting the app)
+/// doesn't re-hit the OpenRouter API every time. Keyed by API key; cleared if
+/// the key changes. A short TTL keeps the list fresh without hammering the API.
+struct ModelCache {
+    api_key: String,
+    models: Vec<OpenRouterModel>,
+    fetched_at: std::time::Instant,
+}
+
+fn models_cache() -> &'static Mutex<Option<ModelCache>> {
+    static CACHE: OnceLock<Mutex<Option<ModelCache>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+const MODEL_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenRouterModel {
@@ -46,7 +75,7 @@ fn is_free(m: &RawModel) -> bool {
 }
 
 fn fetch_json(url: &str, api_key: &str) -> Result<serde_json::Value, String> {
-    let client = reqwest::blocking::Client::new();
+    let client = http_client();
     let res = client
         .get(url)
         .header("Authorization", format!("Bearer {api_key}"))
@@ -74,6 +103,16 @@ pub fn verify_api_key(api_key: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn fetch_free_models(api_key: String) -> Result<Vec<OpenRouterModel>, String> {
+    // Serve from cache if present, fresh, and for the same key.
+    {
+        let cache = models_cache().lock().unwrap();
+        if let Some(c) = cache.as_ref() {
+            if c.api_key == api_key && c.fetched_at.elapsed() < MODEL_CACHE_TTL {
+                return Ok(c.models.clone());
+            }
+        }
+    }
+
     let json = fetch_json(&format!("{OPENROUTER_BASE}/models"), &api_key)?;
     let parsed: ModelsResponse = serde_json::from_value(json).map_err(|e| e.to_string())?;
     let mut models: Vec<OpenRouterModel> = parsed
@@ -87,6 +126,15 @@ pub fn fetch_free_models(api_key: String) -> Result<Vec<OpenRouterModel>, String
         })
         .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
+
+    // Populate the cache so Settings / app re-mounts are instant.
+    let mut cache = models_cache().lock().unwrap();
+    *cache = Some(ModelCache {
+        api_key,
+        models: models.clone(),
+        fetched_at: std::time::Instant::now(),
+    });
+
     Ok(models)
 }
 

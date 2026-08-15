@@ -7,6 +7,7 @@ export interface Settings {
   api_key: string;
   model: string;
   launch_at_login: boolean;
+  show_dock: boolean;
   last_prompt: string;
 }
 
@@ -51,6 +52,10 @@ export function deletePrompt(id: string): Promise<void> {
   return invoke("delete_prompt", { id });
 }
 
+export function renamePrompt(id: string, title: string): Promise<void> {
+  return invoke("rename_prompt", { id, title });
+}
+
 export function verifyApiKey(apiKey: string): Promise<void> {
   return invoke("verify_api_key", { apiKey });
 }
@@ -61,6 +66,36 @@ export function fetchFreeModels(apiKey: string): Promise<OpenRouterModel[]> {
 
 export function onOpenSettings(cb: () => void): Promise<() => void> {
   return listen("open-settings", cb);
+}
+
+/**
+ * Write text to the clipboard. navigator.clipboard.writeText can be blocked or
+ * unavailable inside a Tauri webview, so fall back to a hidden textarea +
+ * execCommand("copy"). Returns true on success.
+ */
+export async function writeClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fall through to the execCommand fallback
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 /** Port of DexTop's `optimizePrompt` meta-prompt (frontend/src/lib/augment.ts). */

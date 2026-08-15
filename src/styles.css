@@ -278,6 +278,19 @@ body {
   border-color: var(--accent);
 }
 
+/* Accessible focus states — a clearly visible outline for keyboard users
+   (overrides the colour-only focus ring for pointer users). */
+.prompt-input:focus-visible,
+.field input:focus-visible,
+.field select:focus-visible,
+.save-row input:focus-visible,
+.saved-rename:focus-visible,
+.icon-btn:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .btn {
   padding: 8px 10px;
   border-radius: 8px;
@@ -466,6 +479,20 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: text;
+}
+
+.saved-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12.5px;
+  outline: none;
+  font-family: inherit;
 }
 
 /* ── Saved-prompt viewer window ── */
@@ -493,4 +520,63 @@ body {
   font-family: inherit;
   user-select: text;
   overflow: auto;
+}
+
+/* ── Error toast (replaces window.alert, a silent no-op in Tauri) ── */
+/* Stack container so multiple errors don't overlap — newest on top. */
+.toast-stack {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: rgba(248, 113, 113, 0.14);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  color: var(--err);
+  font-size: 11.5px;
+  line-height: 1.35;
+  cursor: pointer;
+  pointer-events: auto;
+  animation: fade-in 0.12s ease-out;
+}
+
+.toast-close {
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+/* First-run onboarding hint */
+.hint.onboarding {
+  font-size: 11.5px;
+  color: var(--accent);
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 0;
+}
+
+.hint.onboarding:hover {
+  text-decoration: underline;
+}
+
+/* Saved-prompt viewer copy button */
+.viewer-copy {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  align-self: flex-end;
 }

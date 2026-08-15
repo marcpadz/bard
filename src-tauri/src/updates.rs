@@ -2,7 +2,19 @@ use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tauri::{Emitter, Manager};
+
+/// Shared blocking client with a connection pool (reused across retries).
+fn http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .expect("failed to build update HTTP client")
+    })
+}
 
 const BARD_BUNDLE_ID: &str = "com.bard.prompter";
 const BARD_EXECUTABLE: &str = "bard";
@@ -35,7 +47,7 @@ fn download_and_install(app: &tauri::AppHandle, url: &str, version: &str) -> Res
         return Err("The downloaded DMG doesn't contain Bard.app".into());
     }
     verify_bundle(&mounted_app)?;
-    install_bundle(&mounted_app, &mount)?;
+    install_bundle(&mounted_app)?;
     detach_dmg(&mount)?;
     let _ = fs::remove_file(&dmg);
     relaunch(app);
@@ -49,7 +61,7 @@ fn download_dmg(app: &tauri::AppHandle, url: &str, version: &str) -> Result<Path
         .map_err(|e| e.to_string())?;
     let dest = downloads.join(format!("Bard_{version}_aarch64.dmg"));
 
-    let client = reqwest::blocking::Client::new();
+    let client = http_client();
     let resp = client
         .get(url)
         .header("Accept", "application/octet-stream")
@@ -176,9 +188,9 @@ fn verify_bundle(app_bundle: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Replace the installed app with the update. If a running app was already
-/// installed elsewhere (e.g. ~/Applications), update that copy too.
-fn install_bundle(mounted_app: &Path, mount: &Path) -> Result<(), String> {
+/// Replace the installed app with the update. Copies from the mounted DMG
+/// using `ditto` to preserve code signatures and extended attributes.
+fn install_bundle(mounted_app: &Path) -> Result<(), String> {
     let candidates = ["/Applications", "~/Applications", "~/Desktop"];
 
     let current = env::current_exe()
@@ -202,19 +214,30 @@ fn install_bundle(mounted_app: &Path, mount: &Path) -> Result<(), String> {
     targets.dedup();
 
     if targets.is_empty() {
-        let err = "Couldn't find the installed Bard.app — the downloaded DMG was left in ~/Downloads for manual install.".to_string();
-        let _ = detach_dmg(mount);
-        return Err(err);
+        return Err("Couldn't find the installed Bard.app — the downloaded DMG was left in ~/Downloads for manual install.".to_string());
     }
 
-    // Replace the app bundle in place, keeping its user-facing name.
+    // Copy from mounted DMG to a staging path using ditto (preserves code
+    // signatures and extended attributes across filesystem boundaries).
     for target in &targets {
         let swap = target.with_extension("app.update");
         let _ = fs::remove_dir_all(&swap);
-        fs::rename(mounted_app, &swap).map_err(|e| format!("Couldn't stage the update: {e}"))?;
-        let _ = detach_dmg(mount);
+
+        let cp = std::process::Command::new("/usr/bin/ditto")
+            .arg(mounted_app)
+            .arg(&swap)
+            .output()
+            .map_err(|e| format!("Couldn't copy the update: {e}"))?;
+        if !cp.status.success() {
+            let _ = fs::remove_dir_all(&swap);
+            return Err(format!(
+                "Couldn't stage the update: {}",
+                String::from_utf8_lossy(&cp.stderr).trim()
+            ));
+        }
+
         if let Err(e) = fs::remove_dir_all(target) {
-            let _ = fs::rename(&swap, mounted_app); // best-effort rollback
+            let _ = fs::remove_dir_all(&swap);
             return Err(format!("Couldn't replace the installed app: {e}"));
         }
         fs::rename(&swap, target).map_err(|e| format!("Couldn't install the update: {e}"))?;

@@ -33,20 +33,28 @@ fn main() {
             settings::list_saved_prompts,
             settings::save_prompt,
             settings::delete_prompt,
+            settings::rename_prompt,
             settings::get_prompt_by_id,
             updates::download_update
         ])
         .setup(|app| {
             // Load persisted settings before the window can query them.
             let state = app.state::<AppState>();
-            *state.settings.lock().unwrap() = settings::load(app.handle());
+            let settings = settings::load(app.handle());
+            *state.settings.lock().unwrap() = settings.clone();
 
-            // Hide dock icon — Bard is a menu-bar-only app.
+            // Hide dock icon unless the user opted in — Bard is a menu-bar app
+            // by default, but Settings offers a Dock-icon toggle.
             #[cfg(target_os = "macos")]
             {
                 use tauri::ActivationPolicy;
-                let _ = app.set_activation_policy(ActivationPolicy::Accessory);
-                let _ = app.handle().set_dock_visibility(false);
+                if settings.show_dock {
+                    let _ = app.set_activation_policy(ActivationPolicy::Regular);
+                    let _ = app.handle().set_dock_visibility(true);
+                } else {
+                    let _ = app.set_activation_policy(ActivationPolicy::Accessory);
+                    let _ = app.handle().set_dock_visibility(false);
+                }
             }
 
             tray::create_tray(app)?;
